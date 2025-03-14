@@ -31,6 +31,8 @@ struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showAddAppSheet = false
     @State private var selectedMonth: Date = Date()
+    @State private var filteredContributions: [ContributionDay] = []
+    @State private var contributionGraphData: [[ContributionDay?]] = []
     
     // Array of last 12 months for the selector
     private var last12Months: [Date] {
@@ -72,11 +74,25 @@ struct ContentView: View {
                 appState.fetchGitHubData()
             }
         }
+        .onChange(of: selectedMonth) { _ in
+            processContributionData()
+        }
+        .onChange(of: appState.contributionData) { _ in
+            processContributionData()
+        }
         .sheet(isPresented: $showAddAppSheet) {
             AddAppView(isPresented: $showAddAppSheet)
                 .environmentObject(appState)
                 .frame(width: 400, height: 320)
         }
+    }
+    
+    private func processContributionData() {
+        // Filter contributions for selected month
+        filteredContributions = filterContributionsByMonth(appState.contributionData, for: selectedMonth)
+        
+        // Process data for contribution graph by organizing into weeks
+        contributionGraphData = processContributionGraphData(filteredContributions, for: selectedMonth)
     }
     
     // Contribution Graph Section
@@ -119,13 +135,11 @@ struct ContentView: View {
     }
     
     // Process data for contribution graph by organizing into weeks
-    private var contributionGraphData: [[ContributionDay?]] {
-        let filteredData = filterContributionsByMonth(appState.contributionData, for: selectedMonth)
-        
+    private func processContributionGraphData(_ contributions: [ContributionDay], for date: Date) -> [[ContributionDay?]] {
         // Get the date range for the selected month
         let calendar = Calendar.current
-        let year = calendar.component(.year, from: selectedMonth)
-        let month = calendar.component(.month, from: selectedMonth)
+        let year = calendar.component(.year, from: date)
+        let month = calendar.component(.month, from: date)
         
         guard let startDate = calendar.date(from: DateComponents(year: year, month: month, day: 1)) else {
             return []
@@ -141,7 +155,7 @@ struct ContentView: View {
         
         // Create a lookup dictionary for fast access to contribution data
         var contributionLookup: [String: ContributionDay] = [:]
-        for day in filteredData {
+        for day in contributions {
             contributionLookup[day.date] = day
         }
         
@@ -218,22 +232,7 @@ struct ContentView: View {
                     .padding(.leading, 8)
                     
                     // Contribution grid
-                    VStack(spacing: 4) {
-                        ForEach(contributionGraphData.indices, id: \.self) { weekIndex in
-                            HStack(spacing: 4) {
-                                ForEach(0..<7, id: \.self) { dayIndex in
-                                    if let day = contributionGraphData[weekIndex][dayIndex] {
-                                        ContributionBlock(day: day)
-                                            .frame(width: 14, height: 14)
-                                    } else {
-                                        Rectangle()
-                                            .fill(Color.clear)
-                                            .frame(width: 14, height: 14)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    ContributionGrid(data: contributionGraphData)
                 }
                 .padding(8)
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
@@ -274,7 +273,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
             } else {
-                VStack(spacing: 8) {
+                LazyVStack(spacing: 8) {
                     ForEach(appState.recentRepositories) { repo in
                         RepositoryRow(repository: repo)
                     }
@@ -323,19 +322,43 @@ struct ContentView: View {
     }
 }
 
-// Date formatter for contribution data
+// Date formatter for contribution data - cached for performance
 private let dateFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd"
     return formatter
 }()
 
-// Month-year formatter for picker
+// Month-year formatter for picker - cached for performance
 private let monthYearFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "MMM yyyy"
     return formatter
 }()
+
+// Extracts the contribution grid into a separate optimized View
+struct ContributionGrid: View {
+    let data: [[ContributionDay?]]
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(data.indices, id: \.self) { weekIndex in
+                HStack(spacing: 4) {
+                    ForEach(0..<7, id: \.self) { dayIndex in
+                        if let day = data[weekIndex][dayIndex] {
+                            ContributionBlock(day: day)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Rectangle()
+                                .fill(Color.clear)
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 // Component to display a contribution block
 struct ContributionBlock: View {
@@ -652,9 +675,17 @@ struct CustomAppLauncher: Identifiable, Codable {
     let urlString: String?
 }
 
-// Helper for Color from Hex
+// Helper for Color from Hex - optimized version
 extension Color {
+    static var hexColorCache: [String: Color] = [:]
+    
     init(hex: String) {
+        // Check if color is already cached
+        if let cachedColor = Color.hexColorCache[hex] {
+            self = cachedColor
+            return
+        }
+        
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
         Scanner(string: hex).scanHexInt64(&int)
@@ -670,12 +701,16 @@ extension Color {
             (a, r, g, b) = (1, 1, 1, 0)
         }
         
-        self.init(
+        let color = Color(
             .sRGB,
             red: Double(r) / 255,
             green: Double(g) / 255,
             blue:  Double(b) / 255,
             opacity: Double(a) / 255
         )
+        
+        // Cache the color for future use
+        Color.hexColorCache[hex] = color
+        self = color
     }
 } 
