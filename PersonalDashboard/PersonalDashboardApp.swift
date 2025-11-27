@@ -80,26 +80,49 @@ class MenuBarController: NSObject, NSMenuDelegate {
     }
 }
 
+// Environment object to fix sheet dismissal issues
+class SheetManager: ObservableObject {
+    static let shared = SheetManager()
+    @Published var activeSheets: Set<String> = []
+    
+    func showSheet(_ id: String) {
+        activeSheets.insert(id)
+    }
+    
+    func hideSheet(_ id: String) {
+        activeSheets.remove(id)
+    }
+    
+    func isSheetActive(_ id: String) -> Bool {
+        return activeSheets.contains(id)
+    }
+}
+
 @main
 struct PersonalDashboardApp: App {
     @StateObject private var appState = AppState()
+    @StateObject private var sheetManager = SheetManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
         Settings {
             SettingsView()
                 .environmentObject(appState)
+                .environmentObject(sheetManager)
         }
     }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
+    let sheetManager = SheetManager.shared
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set up our custom menu bar controller
         MenuBarController.shared.setContentView(
-            ContentView().environmentObject(appState)
+            ContentView()
+                .environmentObject(appState)
+                .environmentObject(sheetManager)
         )
         
         // Hide dock icon

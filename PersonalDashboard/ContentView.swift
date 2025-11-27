@@ -29,10 +29,13 @@ struct SheetStrongifier: NSViewRepresentable {
 
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var showAddAppSheet = false
+    @EnvironmentObject private var sheetManager: SheetManager
     @State private var selectedMonth: Date = Date()
     @State private var filteredContributions: [ContributionDay] = []
     @State private var contributionGraphData: [[ContributionDay?]] = []
+    
+    // Constant for sheet identifier
+    private let addAppSheetId = "addAppSheet"
     
     // Array of last 12 months for the selector
     private var last12Months: [Date] {
@@ -70,6 +73,9 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            // Always update to current date when view appears
+            selectedMonth = Date()
+            
             if !appState.githubToken.isEmpty && !appState.username.isEmpty {
                 appState.fetchGitHubData()
             }
@@ -80,9 +86,19 @@ struct ContentView: View {
         .onChange(of: appState.contributionData) { _ in
             processContributionData()
         }
-        .sheet(isPresented: $showAddAppSheet) {
-            AddAppView(isPresented: $showAddAppSheet)
+        .sheet(isPresented: Binding<Bool>(
+            get: { sheetManager.isSheetActive(addAppSheetId) },
+            set: { isActive in
+                if isActive {
+                    sheetManager.showSheet(addAppSheetId)
+                } else {
+                    sheetManager.hideSheet(addAppSheetId)
+                }
+            }
+        )) {
+            ManagedAddAppView(sheetId: addAppSheetId)
                 .environmentObject(appState)
+                .environmentObject(sheetManager)
                 .frame(width: 400, height: 320)
         }
     }
@@ -103,6 +119,17 @@ struct ContentView: View {
                     .font(.headline)
                 
                 Spacer()
+                
+                // Add refresh button
+                Button(action: {
+                    selectedMonth = Date()
+                    appState.fetchGitHubData()
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Refresh data")
                 
                 monthSelector
             }
@@ -292,7 +319,7 @@ struct ContentView: View {
                 Spacer()
                 
                 Button(action: {
-                    showAddAppSheet = true
+                    sheetManager.showSheet(addAppSheetId)
                 }) {
                     Image(systemName: "plus.circle")
                         .font(.system(size: 16))
@@ -311,11 +338,13 @@ struct ContentView: View {
                 
                 // Custom apps
                 ForEach(appState.customAppLaunchers) { app in
-                    if let urlString = app.urlString {
-                        AppLauncherIcon(name: app.name, imageName: app.imageName, urlString: urlString)
-                    } else if let appPath = app.appPath {
-                        AppLauncherIcon(name: app.name, imageName: app.imageName, appPath: appPath)
-                    }
+                    AppLauncherIcon(
+                        name: app.name,
+                        imageName: app.imageName,
+                        appPath: app.appPath,
+                        urlString: app.urlString,
+                        isCustom: true
+                    )
                 }
             }
         }
@@ -372,7 +401,127 @@ struct ContributionBlock: View {
     }
 }
 
-// Add App View
+// Updated AddAppView that works with SheetManager
+struct ManagedAddAppView: View {
+    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var sheetManager: SheetManager
+    let sheetId: String
+    
+    @State private var appName: String = ""
+    @State private var appPath: String = ""
+    @State private var urlString: String = ""
+    @State private var selectedImageName: String = "app"
+    @State private var isWebApp: Bool = false
+    @State private var showingFilePicker: Bool = false
+    
+    let systemImages = [
+        "app", "terminal", "hammer", "swift", "keyboard", "network", "safari", 
+        "pencil", "doc", "folder", "envelope", "calendar", "chart.bar", 
+        "camera", "gamecontroller", "music.note", "video", "figure.walk"
+    ]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Text("Add Custom App")
+                .font(.headline)
+                .padding(.bottom, 5)
+            
+            TextField("App Name", text: $appName)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+            
+            Picker("App Type", selection: $isWebApp) {
+                Text("Native App").tag(false)
+                Text("Web App").tag(true)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            
+            if isWebApp {
+                TextField("URL (e.g., https://example.com)", text: $urlString)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            } else {
+                HStack {
+                    TextField("App Path", text: $appPath)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    
+                    Button("Browse") {
+                        showingFilePicker = true
+                    }
+                    .fileImporter(
+                        isPresented: $showingFilePicker,
+                        allowedContentTypes: [.application],
+                        allowsMultipleSelection: false
+                    ) { result in
+                        do {
+                            let fileURL = try result.get().first!
+                            // Capture the file path
+                            if fileURL.startAccessingSecurityScopedResource() {
+                                appPath = fileURL.path
+                                fileURL.stopAccessingSecurityScopedResource()
+                            }
+                        } catch {
+                            print("Failed to get file path: \(error)")
+                        }
+                    }
+                }
+            }
+            
+            Text("Select Icon")
+                .font(.subheadline)
+            
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(spacing: 12) {
+                    ForEach(systemImages, id: \.self) { imageName in
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(selectedImageName == imageName ? Color.blue.opacity(0.2) : Color.clear)
+                                .frame(width: 40, height: 40)
+                            
+                            Image(systemName: imageName)
+                                .font(.system(size: 20))
+                                .foregroundColor(selectedImageName == imageName ? .blue : .primary)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedImageName = imageName
+                        }
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+            .frame(height: 50)
+            
+            Spacer()
+            
+            HStack {
+                Button("Cancel") {
+                    sheetManager.hideSheet(sheetId)
+                }
+                
+                Spacer()
+                
+                Button("Add") {
+                    if !appName.isEmpty && ((!isWebApp && !appPath.isEmpty) || (isWebApp && !urlString.isEmpty)) {
+                        let newApp = CustomAppLauncher(
+                            name: appName,
+                            imageName: selectedImageName,
+                            appPath: isWebApp ? nil : appPath,
+                            urlString: isWebApp ? urlString : nil
+                        )
+                        appState.addCustomAppLauncher(newApp)
+                        sheetManager.hideSheet(sheetId)
+                    }
+                }
+                .disabled(appName.isEmpty || (isWebApp ? urlString.isEmpty : appPath.isEmpty))
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top)
+        }
+        .padding()
+        .withStrongSheet()
+    }
+}
+
+// Keep the original AddAppView for backward compatibility in other places
 struct AddAppView: View {
     @EnvironmentObject private var appState: AppState
     @Binding var isPresented: Bool
@@ -477,7 +626,11 @@ struct AddAppView: View {
                             urlString: isWebApp ? urlString : nil
                         )
                         appState.addCustomAppLauncher(newApp)
-                        isPresented = false
+                        
+                        // Force dismiss with a small delay to ensure UI state is updated
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            isPresented = false
+                        }
                     }
                 }
                 .disabled(appName.isEmpty || (isWebApp ? urlString.isEmpty : appPath.isEmpty))
@@ -617,16 +770,19 @@ struct RepositoryRow: View {
 
 // App Launcher Icon Component
 struct AppLauncherIcon: View {
+    @EnvironmentObject private var appState: AppState
     let name: String
     let imageName: String
     let appPath: String?
     let urlString: String?
+    let isCustom: Bool
     
     init(name: String, imageName: String, appPath: String) {
         self.name = name
         self.imageName = imageName
         self.appPath = appPath
         self.urlString = nil
+        self.isCustom = false
     }
     
     init(name: String, imageName: String, urlString: String) {
@@ -634,16 +790,21 @@ struct AppLauncherIcon: View {
         self.imageName = imageName
         self.appPath = nil
         self.urlString = urlString
+        self.isCustom = false
+    }
+    
+    // Init for custom apps that can be removed
+    init(name: String, imageName: String, appPath: String?, urlString: String?, isCustom: Bool = true) {
+        self.name = name
+        self.imageName = imageName
+        self.appPath = appPath
+        self.urlString = urlString
+        self.isCustom = isCustom
     }
     
     var body: some View {
         Button(action: {
-            if let path = appPath {
-                let url = URL(fileURLWithPath: path)
-                NSWorkspace.shared.open(url)
-            } else if let urlString = urlString, let url = URL(string: urlString) {
-                NSWorkspace.shared.open(url)
-            }
+            launchApp()
         }) {
             VStack {
                 ZStack {
@@ -663,6 +824,51 @@ struct AppLauncherIcon: View {
             }
         }
         .buttonStyle(PlainButtonStyle())
+        .modifier(ConditionalContextMenu(isCustom: isCustom) {
+            Button(action: {
+                // Find and remove this app launcher
+                if let index = appState.customAppLaunchers.firstIndex(where: { 
+                    $0.name == name && 
+                    $0.imageName == imageName && 
+                    $0.appPath == appPath && 
+                    $0.urlString == urlString 
+                }) {
+                    appState.removeCustomAppLauncher(at: index)
+                }
+            }) {
+                Label("Remove", systemImage: "trash")
+            }
+        })
+    }
+    
+    private func launchApp() {
+        if let path = appPath {
+            let url = URL(fileURLWithPath: path)
+            NSWorkspace.shared.open(url)
+        } else if let urlString = urlString, let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+// Helper modifier for conditional context menu
+struct ConditionalContextMenu<MenuContent: View>: ViewModifier {
+    let isEnabled: Bool
+    let menuContent: () -> MenuContent
+    
+    init(isCustom: Bool, @ViewBuilder menuContent: @escaping () -> MenuContent) {
+        self.isEnabled = isCustom
+        self.menuContent = menuContent
+    }
+    
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.contextMenu {
+                menuContent()
+            }
+        } else {
+            content
+        }
     }
 }
 
